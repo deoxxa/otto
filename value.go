@@ -676,7 +676,21 @@ func (self Value) export() interface{} {
 		case *_goSliceObject:
 			return value.value.Interface()
 		}
-		if object.class == "Array" {
+		if object.class == "Function" {
+			return func(args ...interface{}) (interface{}, error) {
+				r, err := self.Call(NullValue(), args...)
+				if err != nil {
+					return nil, err
+				}
+
+				v, err := r.Export()
+				if err != nil {
+					return nil, err
+				}
+
+				return v, nil
+			}
+		} else if object.class == "Array" {
 			result := make([]interface{}, 0)
 			lengthValue := object.get("length")
 			length := lengthValue.value.(uint32)
