@@ -32,9 +32,12 @@ type _error struct {
 }
 
 type _frame struct {
-	file   *file.File
-	offset int
-	callee string
+	native     bool
+	nativeFile string
+	nativeLine int
+	file       *file.File
+	offset     int
+	callee     string
 }
 
 var (
@@ -44,19 +47,25 @@ var (
 type _at int
 
 func (fr _frame) location() string {
-	if fr.file == nil {
-		return "<unknown>"
+	str := "<unknown>"
+
+	switch {
+	case fr.native:
+		str = "<native code>"
+		if fr.nativeFile != "" && fr.nativeLine != 0 {
+			str = fmt.Sprintf("%s:%d", fr.nativeFile, fr.nativeLine)
+		}
+	case fr.file != nil:
+		p := fr.file.Position(file.Idx(fr.offset))
+
+		path, line, column := p.Filename, p.Line, p.Column
+
+		if path == "" {
+			path = "<anonymous>"
+		}
+
+		str = fmt.Sprintf("%s:%d:%d", path, line, column)
 	}
-
-	p := fr.file.Position(file.Idx(fr.offset))
-
-	path, line, column := p.Filename, p.Line, p.Column
-
-	if path == "" {
-		path = "<anonymous>"
-	}
-
-	str := fmt.Sprintf("%s:%d:%d", path, line, column)
 
 	if fr.callee != "" {
 		str = fmt.Sprintf("%s (%s)", fr.callee, str)
@@ -117,7 +126,7 @@ func (rt *_runtime) typeErrorResult(throw bool) bool {
 	return false
 }
 
-func newError(rt *_runtime, name string, in ...interface{}) _error {
+func newError(rt *_runtime, name string, stackFramesToPop int, in ...interface{}) _error {
 	err := _error{
 		name:   name,
 		offset: -1,
@@ -127,7 +136,15 @@ func newError(rt *_runtime, name string, in ...interface{}) _error {
 
 	if rt != nil {
 		scope := rt.scope
+
+		for i := 0; i < stackFramesToPop; i++ {
+			if scope.outer != nil {
+				scope = scope.outer
+			}
+		}
+
 		frame := scope.frame
+
 		if length > 0 {
 			if at, ok := in[length-1].(_at); ok {
 				in = in[0 : length-1]
@@ -160,36 +177,37 @@ func newError(rt *_runtime, name string, in ...interface{}) _error {
 		}
 	}
 	err.message = err.describe(description, in...)
+
 	return err
 }
 
 func (rt *_runtime) panicTypeError(argumentList ...interface{}) *_exception {
 	return &_exception{
-		value: newError(rt, "TypeError", argumentList...),
+		value: newError(rt, "TypeError", 0, argumentList...),
 	}
 }
 
 func (rt *_runtime) panicReferenceError(argumentList ...interface{}) *_exception {
 	return &_exception{
-		value: newError(rt, "ReferenceError", argumentList...),
+		value: newError(rt, "ReferenceError", 0, argumentList...),
 	}
 }
 
 func (rt *_runtime) panicURIError(argumentList ...interface{}) *_exception {
 	return &_exception{
-		value: newError(rt, "URIError", argumentList...),
+		value: newError(rt, "URIError", 0, argumentList...),
 	}
 }
 
 func (rt *_runtime) panicSyntaxError(argumentList ...interface{}) *_exception {
 	return &_exception{
-		value: newError(rt, "SyntaxError", argumentList...),
+		value: newError(rt, "SyntaxError", 0, argumentList...),
 	}
 }
 
 func (rt *_runtime) panicRangeError(argumentList ...interface{}) *_exception {
 	return &_exception{
-		value: newError(rt, "RangeError", argumentList...),
+		value: newError(rt, "RangeError", 0, argumentList...),
 	}
 }
 
@@ -200,6 +218,9 @@ func catchPanic(function func()) (err error) {
 				caught = exception.eject()
 			}
 			switch caught := caught.(type) {
+			case *Error:
+				err = caught
+				return
 			case _error:
 				err = &Error{caught}
 				return
